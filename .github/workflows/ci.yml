@@ -35,3 +35,5 @@ jobs:
         run: npm run build
         env:
           NODE_ENV: production
+          VITE_SUPABASE_URL: https://mock-supabase.supabase.co
+          VITE_SUPABASE_PUBLISHABLE_KEY: mock-anon-key-12345
