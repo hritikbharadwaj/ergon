@@ -65,6 +65,7 @@ import ActivityTrackerMount from '@/components/ActivityTrackerMount';
 import NoticeBroadcast from '@/pages/NoticeBroadcast';
 import SecurityPolicy from './pages/SecurityPolicy';
 import ModuleHub from '@/pages/ModuleHub';
+import ErrorBoundary from '@/components/ErrorBoundary';
 function App() {
   return (
     <AuthProvider>
@@ -75,6 +76,7 @@ function App() {
         <ScrollRestoration />
         <ActivityTrackerMount />
         <DashboardShell>
+        <ErrorBoundary>
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/security-policy" element={<SecurityPolicy />} />
@@ -282,6 +284,7 @@ function App() {
           <Route path="/dashboard/hub/:hubId" element={<ProtectedRoute><ModuleHub /></ProtectedRoute>} />
           <Route path="*" element={<NotFound />} />
         </Routes>
+        </ErrorBoundary>
         </DashboardShell>
         </BrowserRouter>
       </MeetingProvider>
