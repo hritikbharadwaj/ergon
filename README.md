@@ -523,6 +523,32 @@ ergon-workplace/
 
 ---
 
+## Developer Workflow & Git Conventions
+
+To ensure smooth collaboration and maintainable history across team contributions, please adhere to the following conventions:
+
+### Branching Strategy
+- `main`: Production-ready branch. All changes are merged through tested pull requests.
+- `feature/<name>`: New features or UI module additions.
+- `fix/<name>`: Bug fixes and performance patches.
+- `refactor/<name>`: Code restructuring and typing updates without changing business logic.
+
+### Commit Guidelines (Conventional Commits)
+Commits should use structured prefixes:
+- `feat:` A new feature or user-facing functionality.
+- `fix:` A bug fix.
+- `refactor:` Code change that neither fixes a bug nor adds a feature.
+- `perf:` Performance improvements.
+- `docs:` Documentation updates.
+- `chore:` Tooling, configurations, or non-source updates.
+
+### Local Quality Checklist
+1. Ensure all TypeScript types pass without suppression: code must be strongly typed.
+2. Confirm component styles maintain accessibility standards (contrast, focus states).
+3. Validate responsiveness on desktop, tablet, and mobile breakpoints.
+
+---
+
 ## Operational notes
 
 - **Project name:** Ergon.
