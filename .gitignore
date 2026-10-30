@@ -25,3 +25,16 @@ dist-ssr
 
 # Local Netlify folder
 .netlify
+
+# Environment variables
+.env.local
+.env.*.local
+
+# Testing and coverage
+coverage/
+*.lcov
+
+# Temporary and cache
+*.tmp
+*.temp
+.cache
