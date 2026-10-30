@@ -15,6 +15,31 @@ import {
 const fromTable = (table: string) => supabase.from(table as any);
 
 class MeetingService {
+  /**
+   * Validates whether a provided meeting link is a valid web URL (e.g. Google Meet, Zoom, Teams)
+   */
+  static isValidMeetingUrl(url: string | null | undefined): boolean {
+    if (!url) return false;
+    try {
+      const parsed = new URL(url.trim());
+      return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Normalizes a meeting link with https:// if omitted
+   */
+  static normalizeMeetingUrl(url: string): string {
+    const trimmed = url.trim();
+    if (!trimmed) return '';
+    if (/^https?:\/\//i.test(trimmed)) {
+      return trimmed;
+    }
+    return `https://${trimmed}`;
+  }
+
   static calculateStatus(meeting: MeetingSettings, currentTime: Date): MeetingStatus {
     if (meeting.manual_status === 'OFFLINE') return 'OFFLINE';
     if (meeting.manual_status === 'LIVE') return 'LIVE';
@@ -100,93 +125,122 @@ class MeetingService {
     } catch (error) { return { success: false, status: 'OFFLINE', message: 'Error joining meeting' }; }
   }
 
-  static async updateMeetingSettings(roomName: string, updates: UpdateMeetingRequest): Promise<MeetingSettings | null> {
+  static async leaveMeeting(roomName: string, userId: string): Promise<void> {
     try {
-      const { data: updated, error } = await (fromTable('meeting_settings')
-        .update(updates).eq('room_name', roomName).select().single() as any);
-      if (error) return null;
-      return updated as MeetingSettings;
-    } catch (error) { return null; }
+      const meetingInfo = await this.getMeetingInfo(roomName);
+      if (!meetingInfo) return;
+      await this.logActivity(meetingInfo.id, userId, 'left');
+    } catch (error) { console.error('Error leaving meeting:', error); }
   }
 
-  static async toggleMeeting(roomName: string, action: 'start' | 'end'): Promise<MeetingSettings | null> {
+  static async updateMeetingSettings(roomName: string, updates: UpdateMeetingRequest): Promise<boolean> {
     try {
-      const manualStatus = action === 'start' ? 'LIVE' : 'OFFLINE';
-      const { data: meeting, error: fetchError } = await (fromTable('meeting_settings')
-        .select('id').eq('room_name', roomName).single() as any);
-      if (fetchError || !meeting) return null;
-
-      const actionType = action === 'start' ? 'admin_started' : 'admin_ended';
-      const { data: user } = await supabase.auth.getUser();
-      if (user.user) {
-        await this.logActivity(meeting.id, user.user.id, actionType as ActivityAction);
-        if (action === 'start') {
-          await (fromTable('meeting_sessions').insert({
-            room_id: meeting.id, started_at: new Date().toISOString(), started_by_user_id: user.user.id,
-          }) as any);
-        } else if (action === 'end') {
-          const { data: lastSession } = await (fromTable('meeting_sessions')
-            .select('id').eq('room_id', meeting.id).is('ended_at', null)
-            .order('started_at', { ascending: false }).limit(1).single() as any);
-          if (lastSession) {
-            await (fromTable('meeting_sessions').update({ ended_at: new Date().toISOString() }).eq('id', lastSession.id) as any);
-          }
-        }
+      const updateData: any = { updated_at: new Date().toISOString() };
+      if (updates.meet_link !== undefined) {
+        updateData.meet_link = this.normalizeMeetingUrl(updates.meet_link);
       }
+      if (updates.title !== undefined) updateData.title = updates.title;
+      if (updates.description !== undefined) updateData.description = updates.description;
+      if (updates.start_time !== undefined) updateData.start_time = updates.start_time;
+      if (updates.end_time !== undefined) updateData.end_time = updates.end_time;
+      if (updates.recurrence_type !== undefined) updateData.recurrence_type = updates.recurrence_type;
+      if (updates.recurrence_date !== undefined) updateData.recurrence_date = updates.recurrence_date;
+      if (updates.manual_status !== undefined) updateData.manual_status = updates.manual_status;
+      if (updates.timezone !== undefined) updateData.timezone = updates.timezone;
 
-      const { data: updated, error: updateError } = await (fromTable('meeting_settings')
-        .update({ manual_status: manualStatus }).eq('room_name', roomName).select().single() as any);
-      if (updateError) return null;
-      return updated as MeetingSettings;
-    } catch (error) { return null; }
+      const { error } = await (fromTable('meeting_settings')
+        .update(updateData).eq('room_name', roomName) as any);
+      return !error;
+    } catch (error) { console.error('Error updating meeting settings:', error); return false; }
+  }
+
+  static async setManualStatus(roomName: string, status: 'LIVE' | 'OFFLINE' | null, adminUserId: string): Promise<boolean> {
+    try {
+      const meetingInfo = await this.getMeetingInfo(roomName);
+      if (!meetingInfo) return false;
+
+      const success = await this.updateMeetingSettings(roomName, { manual_status: status });
+      if (!success) return false;
+
+      if (status === 'LIVE') {
+        await this.logActivity(meetingInfo.id, adminUserId, 'admin_started');
+        await this.startMeetingSession(meetingInfo.id, adminUserId);
+      } else if (status === 'OFFLINE') {
+        await this.logActivity(meetingInfo.id, adminUserId, 'admin_ended');
+        await this.endMeetingSession(meetingInfo.id);
+      }
+      return true;
+    } catch (error) { console.error('Error setting manual status:', error); return false; }
+  }
+
+  private static async startMeetingSession(roomId: string, adminUserId: string): Promise<void> {
+    try {
+      await (fromTable('meeting_sessions').insert({
+        room_id: roomId, started_by: adminUserId, started_at: new Date().toISOString(),
+      }) as any);
+    } catch (error) { console.error('Error starting meeting session:', error); }
+  }
+
+  private static async endMeetingSession(roomId: string): Promise<void> {
+    try {
+      const { data: session } = await (fromTable('meeting_sessions')
+        .select('*').eq('room_id', roomId).is('ended_at', null)
+        .order('started_at', { ascending: false }).limit(1).single() as any);
+      if (!session) return;
+      await (fromTable('meeting_sessions').update({ ended_at: new Date().toISOString() }).eq('id', session.id) as any);
+    } catch (error) { console.error('Error ending meeting session:', error); }
   }
 
   private static async logActivity(roomId: string, userId: string, action: ActivityAction): Promise<void> {
     try {
-      await (fromTable('meeting_activity').insert({
-        room_id: roomId, user_id: userId, action,
-        joined_at: action === 'joined' ? new Date().toISOString() : undefined,
-      }) as any);
-    } catch (error) { console.error('Error logging activity:', error); }
+      const activityData: any = { room_id: roomId, user_id: userId, action };
+      if (action === 'joined') activityData.joined_at = new Date().toISOString();
+      if (action === 'left') activityData.left_at = new Date().toISOString();
+      await (fromTable('meeting_activities').insert(activityData) as any);
+    } catch (error) { console.error('Error logging meeting activity:', error); }
   }
 
   private static async updateStats(roomId: string, userId: string): Promise<void> {
     try {
       const today = new Date().toISOString().split('T')[0];
-      const { data: existingStats } = await (fromTable('meeting_stats')
+      const now = new Date().toISOString();
+      const { data: existing } = await (fromTable('meeting_stats')
         .select('*').eq('room_id', roomId).eq('date', today).single() as any);
 
-      if (existingStats) {
+      if (existing) {
         await (fromTable('meeting_stats').update({
-          join_count: (existingStats.join_count || 0) + 1,
-          last_joined_at: new Date().toISOString(), last_joined_by_user_id: userId,
-        }).eq('id', existingStats.id) as any);
+          join_count: existing.join_count + 1, last_joined_at: now,
+          last_joined_by_user_id: userId, updated_at: now,
+        }).eq('id', existing.id) as any);
       } else {
         await (fromTable('meeting_stats').insert({
-          room_id: roomId, date: today, join_count: 1,
-          last_joined_at: new Date().toISOString(), last_joined_by_user_id: userId,
+          room_id: roomId, date: today, join_count: 1, last_joined_at: now,
+          last_joined_by_user_id: userId, created_at: now, updated_at: now,
         }) as any);
       }
-    } catch (error) { console.error('Error updating stats:', error); }
+    } catch (error) { console.error('Error updating meeting stats:', error); }
   }
 
-  static async getMeetingStats(roomName: string, date: string): Promise<MeetingStatsResponse | null> {
+  static async getMeetingStats(roomName: string, date?: string): Promise<MeetingStatsResponse | null> {
     try {
+      const queryDate = date || new Date().toISOString().split('T')[0];
       const { data: meeting } = await (fromTable('meeting_settings')
         .select('id').eq('room_name', roomName).single() as any);
       if (!meeting) return null;
 
       const { data: stats } = await (fromTable('meeting_stats')
-        .select('*').eq('room_id', meeting.id).eq('date', date).single() as any);
+        .select('*').eq('room_id', meeting.id).eq('date', queryDate).single() as any);
       if (!stats) return null;
 
-      const { data: activities } = await (fromTable('meeting_activity')
-        .select('user_id, created_at').eq('room_id', meeting.id).eq('action', 'joined')
-        .gte('created_at', `${date}T00:00:00`).lt('created_at', `${date}T23:59:59`) as any);
+      const { data: activities } = await (fromTable('meeting_activities')
+        .select('user_id, action, created_at').eq('room_id', meeting.id)
+        .gte('created_at', `${queryDate}T00:00:00`).lte('created_at', `${queryDate}T23:59:59`) as any);
 
       const visitorMap = new Map<string, { user_id: string; join_count: number; last_joined: string }>();
-      (activities || []).forEach((a: any) => {
-        if (!visitorMap.has(a.user_id)) visitorMap.set(a.user_id, { user_id: a.user_id, join_count: 0, last_joined: a.created_at });
+      (activities || []).filter((a: any) => a.action === 'joined').forEach((a: any) => {
+        if (!visitorMap.has(a.user_id)) {
+          visitorMap.set(a.user_id, { user_id: a.user_id, join_count: 0, last_joined: a.created_at });
+        }
         const v = visitorMap.get(a.user_id)!;
         v.join_count += 1; v.last_joined = a.created_at;
       });
@@ -220,8 +274,9 @@ class MeetingService {
   ): Promise<MeetingSettings | null> {
     try {
       const { data: user } = await supabase.auth.getUser();
+      const normalizedLink = this.normalizeMeetingUrl(meetLink);
       const { data: newMeeting, error } = await (fromTable('meeting_settings').insert({
-        room_name: roomName, meet_link: meetLink, title, description,
+        room_name: roomName, meet_link: normalizedLink, title, description,
         start_time: startTime, end_time: endTime, recurrence_type: recurrenceType,
         recurrence_date: recurrenceDate, timezone, created_by: user.user?.id,
       }).select().single() as any);
