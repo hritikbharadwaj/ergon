@@ -1,4 +1,3 @@
-
 export interface User {
   id: string;
   name: string;
@@ -16,6 +15,20 @@ export type UserRole =
   | 'tech_admin'
   | 'content_admin'
   | 'hr_admin';
+
+export type UserStatus = 'active' | 'suspended' | 'invited' | 'inactive';
+
+export interface UserSessionMeta {
+  ipAddress?: string;
+  userAgent?: string;
+  loginTime: string;
+  geolocation?: {
+    latitude: number;
+    longitude: number;
+    city?: string;
+    country?: string;
+  };
+}
 
 export interface AuthContextType {
   user: User | null;
@@ -41,3 +54,20 @@ export const roleNames: Record<UserRole, string> = {
   content_admin: 'Content Admin',
   hr_admin: 'HR Admin'
 };
+
+/**
+ * Type guard to check if role is super_admin
+ */
+export function isSuperAdmin(role?: string | null): boolean {
+  return role === 'super_admin';
+}
+
+/**
+ * Check if a role has access to a specific permission scope
+ */
+export function hasPermission(role: UserRole | string | undefined | null, permission: string): boolean {
+  if (!role) return false;
+  const permissions = rolePermissions[role as UserRole];
+  if (!permissions) return false;
+  return permissions.includes('*') || permissions.includes(permission);
+}
