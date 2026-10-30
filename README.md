@@ -1,7 +1,5 @@
 <div align="center">
 
-<img src="https://github.com/user-attachments/assets/4e805623-2f52-4b59-9a46-f51c651fe65e" alt="Ergon" width="260" />
-
 <br />
 
 # ERGON
